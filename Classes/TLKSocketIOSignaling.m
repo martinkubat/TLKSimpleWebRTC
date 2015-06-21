@@ -50,6 +50,7 @@
 
 @property (nonatomic, readwrite) NSString *roomName;
 @property (nonatomic, readwrite) NSString *roomKey;
+@property (nonatomic, readwrite) int partnersPresent;
 
 @property (strong, readwrite, nonatomic) RTCMediaStream *localMediaStream;
 @property (strong, readwrite, nonatomic) NSArray *remoteMediaStreamWrappers;
@@ -139,7 +140,7 @@
 
 - (TLKMediaStream *)_streamForPeerIdentifier:(NSString *)peerIdentifier {
     __block TLKMediaStream *found = nil;
-    
+
     [self.remoteMediaStreamWrappers enumerateObjectsUsingBlock:^(id obj, NSUInteger idx, BOOL *stop) {
         if ([((TLKMediaStream *)obj).peerID isEqualToString:peerIdentifier]) {
             found = obj;
@@ -147,25 +148,26 @@
         }
     }];
     
+
     return found;
 }
 
 - (void)_peerDisconnectedForIdentifier:(NSString *)peerIdentifier {
     NSMutableArray* mutable = [self.remoteMediaStreamWrappers mutableCopy];
     NSMutableIndexSet* toRemove = [NSMutableIndexSet new];
-    
+
     [mutable enumerateObjectsUsingBlock:^(id obj, NSUInteger idx, BOOL *stop) {
         if ([((TLKMediaStream *)obj).peerID isEqualToString:peerIdentifier]) {
             [toRemove addIndex:idx];
         }
     }];
-    
+
     NSArray* objects = [self.remoteMediaStreamWrappers objectsAtIndexes:toRemove];
-    
+
     [mutable removeObjectsAtIndexes:toRemove];
-    
+
     self.remoteMediaStreamWrappers = mutable;
-    
+
     if ([self.delegate respondsToSelector:@selector(socketIOSignaling:removedStream:)]) {
         for (TLKMediaStream *stream in objects) {
             [self.delegate socketIOSignaling:self removedStream:stream];
@@ -183,7 +185,7 @@
     if (self.socket) {
         [self _disconnectSocket];
     }
-    
+
     __weak TLKSocketIOSignaling *weakSelf = self;
 
     self.socket = [[AZSocketIO alloc] initWithHost:apiServer andPort:[NSString stringWithFormat:@"%d",port] secure:secure];
@@ -196,12 +198,12 @@
     self.socket.eventReceivedBlock = ^(NSString *eventName, id data) { [weakSelf _socketEventReceived:eventName withData:data]; };
     self.socket.disconnectedBlock = ^() { [weakSelf _socketDisconnected]; };
     self.socket.errorBlock = ^(NSError *error) { [weakSelf _socketReceivedError:error]; };
-    
+
     self.socket.reconnectionLimit = 5.0f;
-    
+
     [self.socket connectWithSuccess:^{
         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-            
+
             if (!weakSelf.webRTC) {
                 if (weakSelf.allowVideo && weakSelf.videoDevice) {
                     weakSelf.webRTC = [[TLKWebRTC alloc] initWithVideoDevice:self.videoDevice];
@@ -210,10 +212,10 @@
                 }
                 weakSelf.webRTC.delegate = weakSelf;
             }
-            
+
             dispatch_async(dispatch_get_main_queue(), ^{
                 weakSelf.localMediaStream = weakSelf.webRTC.localMediaStream;
-                
+
                 if (successCallback) {
                     successCallback();
                 }
@@ -238,17 +240,18 @@
     [self.socket emit:@"join" args:args error:&error ackWithArgs:^(NSArray *data) {
         if (data[0] == [NSNull null]) {
             NSDictionary* clients = data[1][@"clients"];
-            
+
             [[clients allKeys] enumerateObjectsUsingBlock:^(id peerID, NSUInteger idx, BOOL *stop) {
                 [self.webRTC addPeerConnectionForID:peerID];
                 [self.webRTC createOfferForPeerWithID:peerID];
-                
+
                 [self.currentClients addObject:peerID];
             }];
-            
+
             self.roomName = room;
             self.roomKey = key;
-            
+            self.partnersPresent = [data[1][@"clients"] count];
+
             if(successCallback) {
                 successCallback();
             }
@@ -272,9 +275,9 @@
         [self.webRTC removePeerConnectionForID:peerID];
         [self _peerDisconnectedForIdentifier:peerID];
     }];
-    
+
     self.currentClients = [[NSMutableSet alloc] init];
-    
+
     [self _disconnectSocket];
 }
 
@@ -348,29 +351,29 @@
 
 - (void)_socketEventReceived:(NSString*)eventName withData:(id)data {
     NSDictionary *dictionary = nil;
-    
+
     if ([eventName isEqualToString:@"locked"]) {
-        
+
         self.roomKey = (NSString*)[data objectAtIndex:0];
         if ([self.delegate respondsToSelector:@selector(socketIOSignaling:didChangeLock:)]) {
             [self.delegate socketIOSignaling:self didChangeLock:YES];
         }
-        
+
     } else if ([eventName isEqualToString:@"unlocked"]) {
-        
+
         self.roomKey = nil;
         if ([self.delegate respondsToSelector:@selector(socketIOSignaling:didChangeLock:)]) {
             [self.delegate socketIOSignaling:self didChangeLock:NO];
         }
-        
+
     } else if ([eventName isEqualToString:@"passwordRequired"]) {
-        
+
         if ([self.delegate respondsToSelector:@selector(socketIOSignalingRequiresServerPassword:)]) {
             [self.delegate socketIOSignalingRequiresServerPassword:self];
         }
-        
+
     } else if ([eventName isEqualToString:@"stunservers"] || [eventName isEqualToString:@"turnservers"]) {
-        
+
         NSArray *serverList = data[0];
         for (NSDictionary *info in serverList) {
             NSString *username = info[@"username"] ? info[@"username"] : @"";
@@ -378,80 +381,80 @@
             RTCICEServer *server = [[RTCICEServer alloc] initWithURI:[NSURL URLWithString:info[@"url"]] username:username password:password];
             [self.webRTC addICEServer:server];
         }
-        
+
     } else {
-        
+
         dictionary = data[0];
-        
+
         if (![dictionary isKindOfClass:[NSDictionary class]]) {
             dictionary = nil;
         }
-        
+
     }
 
     NSLog(@"eventName = %@, type = %@, from = %@, to = %@",eventName, dictionary[@"type"], dictionary[@"from"], dictionary[@"to"]);
-    
+
     if ([dictionary[@"type"] isEqualToString:@"iceFailed"]) {
-    
+
         [[[UIAlertView alloc] initWithTitle:@"Connection Failed" message:@"Talky could not establish a connection to a participant in this chat. Please try again later." delegate:nil cancelButtonTitle:@"Continue" otherButtonTitles:nil] show];
-    
+
     } else if ([dictionary[@"type"] isEqualToString:@"candidate"]) {
-        
+
         RTCICECandidate* candidate = [[RTCICECandidate alloc] initWithMid:dictionary[@"payload"][@"candidate"][@"sdpMid"]
                                                                     index:[dictionary[@"payload"][@"candidate"][@"sdpMLineIndex"] integerValue]
                                                                       sdp:dictionary[@"payload"][@"candidate"][@"candidate"]];
-        
+
         [self.webRTC addICECandidate:candidate forPeerWithID:dictionary[@"from"]];
-        
+
     } else if ([dictionary[@"type"] isEqualToString:@"answer"]) {
-        
+
         RTCSessionDescription* remoteSDP = [[RTCSessionDescription alloc] initWithType:dictionary[@"payload"][@"type"]
                                                                                    sdp:dictionary[@"payload"][@"sdp"]];
-        
+
         [self.webRTC setRemoteDescription:remoteSDP forPeerWithID:dictionary[@"from"] receiver:NO];
-        
+
     } else if ([dictionary[@"type"] isEqualToString:@"offer"]) {
-        
+
         [self.webRTC addPeerConnectionForID:dictionary[@"from"]];
         [self.currentClients addObject:dictionary[@"from"]];
-        
+
         // Fix for browser-to-app connection crash using beta API.
         NSString* origSDP = dictionary[@"payload"][@"sdp"];
         NSError* error;
         NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:@"m=application \\d+ DTLS/SCTP 5000 *"
                                                                                options:0
                                                                                  error:&error];
-        
+
         NSString* sdp = [regex stringByReplacingMatchesInString:origSDP options:0 range:NSMakeRange(0, [origSDP length]) withTemplate:@"m=application 0 DTLS/SCTP 5000"];
-        
+
         RTCSessionDescription* remoteSDP = [[RTCSessionDescription alloc] initWithType:dictionary[@"payload"][@"type"]
                                                                                    sdp:sdp];
-        
+
         [self.webRTC setRemoteDescription:remoteSDP forPeerWithID:dictionary[@"from"] receiver:YES];
-        
+
     } else if ([eventName isEqualToString:@"remove"]) {
-        
+
         [self.webRTC removePeerConnectionForID:dictionary[@"id"]];
         [self _peerDisconnectedForIdentifier:dictionary[@"id"]];
-        
+
         [self.currentClients removeObject:dictionary[@"id"]];
-        
+
     } else if ([dictionary[@"payload"][@"name"] isEqualToString:@"audio"]) {
-    
+
         TLKMediaStream *stream = [self _streamForPeerIdentifier:dictionary[@"from"]];
         stream.audioMuted = [dictionary[@"type"] isEqualToString:@"mute"];
         if([self.delegate respondsToSelector:@selector(socketIOSignaling:peer:toggledAudioMute:)]) {
             [self.delegate socketIOSignaling:self peer:dictionary[@"from"] toggledAudioMute:stream.audioMuted];
         }
-    
+
     } else if ([dictionary[@"payload"][@"name"] isEqualToString:@"video"]) {
-    
+
         TLKMediaStream *stream = [self _streamForPeerIdentifier:dictionary[@"from"]];
         stream.videoMuted = [dictionary[@"type"] isEqualToString:@"mute"];
         if([self.delegate respondsToSelector:@selector(socketIOSignaling:peer:toggledVideoMute:)]) {
             [self.delegate socketIOSignaling:self peer:dictionary[@"from"] toggledVideoMute:stream.videoMuted];
         }
-    
+
     }
 }
 
@@ -510,14 +513,14 @@
     TLKMediaStream *tlkStream = [TLKMediaStream new];
     tlkStream.stream = stream;
     tlkStream.peerID = peerID;
-    
+
     if (!self.remoteMediaStreamWrappers) {
         self.remoteMediaStreamWrappers = @[tlkStream];
     }
     else {
         self.remoteMediaStreamWrappers = [self.remoteMediaStreamWrappers arrayByAddingObject:tlkStream];
     }
-    
+
     if ([self.delegate respondsToSelector:@selector(socketIOSignaling:addedStream:)]) {
         [self.delegate socketIOSignaling:self addedStream:tlkStream];
     }
@@ -526,19 +529,19 @@
 - (void)webRTC:(TLKWebRTC *)webRTC removedStream:(RTCMediaStream *)stream forPeerWithID:(NSString *)peerID {
     NSMutableArray *mutable = [self.remoteMediaStreamWrappers mutableCopy];
     NSMutableIndexSet *toRemove = [NSMutableIndexSet new];
-    
+
     [mutable enumerateObjectsUsingBlock:^(id obj, NSUInteger idx, BOOL *stop) {
         if (((TLKMediaStream *)obj).stream == stream) {
             [toRemove addIndex:idx];
         }
     }];
-    
+
     NSArray *objects = [self.remoteMediaStreamWrappers objectsAtIndexes:toRemove];
-    
+
     [mutable removeObjectsAtIndexes:toRemove];
-    
+
     self.remoteMediaStreamWrappers = mutable;
-    
+
     if ([self.delegate respondsToSelector:@selector(socketIOSignaling:removedStream:)]) {
         for (TLKMediaStream *stream in objects) {
             [self.delegate socketIOSignaling:self removedStream:stream];

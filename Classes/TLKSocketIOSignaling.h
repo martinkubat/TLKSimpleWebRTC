@@ -48,6 +48,9 @@ typedef void (^TLKSocketIOSignalingFailureBlock)(NSError *error);
 @property (readonly, nonatomic, getter=isRoomLocked) BOOL roomLocked;
 @property (readonly, nonatomic) NSString *roomName;
 @property (readonly, nonatomic) NSString *roomKey;
+@property (readonly, nonatomic) int partnersPresent;
+
+@property (readonly, nonatomic) NSMutableSet *currentClients;
 
 @end
 
