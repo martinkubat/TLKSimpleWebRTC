@@ -147,7 +147,7 @@
             *stop = YES;
         }
     }];
-    
+
 
     return found;
 }
@@ -179,6 +179,54 @@
 
 - (void)connectToServer:(NSString*)apiServer success:(void(^)(void))successCallback failure:(void(^)(NSError*))failureCallback {
     [self connectToServer:apiServer port:8888 secure:YES success:successCallback failure:failureCallback];
+}
+
+- (void)connectToServer:(NSString*)apiServer port:(int)port namespace:(NSString*)namespace secure:(BOOL)secure success:(void(^)(void))successCallback failure:(void(^)(NSError*))failureCallback {
+  if (self.socket) {
+    [self _disconnectSocket];
+  }
+
+  __weak TLKSocketIOSignaling *weakSelf = self;
+
+  self.socket = [[AZSocketIO alloc] initWithHost:apiServer andPort:[NSString stringWithFormat:@"%d",port] secure:secure withNamespace:namespace];
+
+  NSString* originURL = [NSString stringWithFormat:@"https://%@:%d/%@", apiServer, port, namespace];
+  [self.socket setValue:originURL forHTTPHeaderField:@"Origin"];
+
+  // setup SocketIO blocks
+  self.socket.messageReceivedBlock = ^(id data) { [weakSelf _socketMessageReceived:data]; };
+  self.socket.eventReceivedBlock = ^(NSString *eventName, id data) { [weakSelf _socketEventReceived:eventName withData:data]; };
+  self.socket.disconnectedBlock = ^() { [weakSelf _socketDisconnected]; };
+  self.socket.errorBlock = ^(NSError *error) { [weakSelf _socketReceivedError:error]; };
+
+  self.socket.reconnectionLimit = 5.0f;
+
+  [self.socket connectWithSuccess:^{
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+
+      if (!weakSelf.webRTC) {
+        if (weakSelf.allowVideo && weakSelf.videoDevice) {
+          weakSelf.webRTC = [[TLKWebRTC alloc] initWithVideoDevice:self.videoDevice];
+        } else {
+          weakSelf.webRTC = [[TLKWebRTC alloc] initWithVideo:NO];
+        }
+        weakSelf.webRTC.delegate = weakSelf;
+      }
+
+      dispatch_async(dispatch_get_main_queue(), ^{
+        weakSelf.localMediaStream = weakSelf.webRTC.localMediaStream;
+
+        if (successCallback) {
+          successCallback();
+        }
+      });
+    });
+  } andFailure:^(NSError *error) {
+    DLog(@"Failed to connect socket.io: %@", error);
+    if (failureCallback) {
+      failureCallback(error);
+    }
+  }];
 }
 
 - (void)connectToServer:(NSString*)apiServer port:(int)port secure:(BOOL)secure success:(void(^)(void))successCallback failure:(void(^)(NSError*))failureCallback {
